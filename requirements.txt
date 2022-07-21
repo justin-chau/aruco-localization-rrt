@@ -1,0 +1,6 @@
+matplotlib~=3.5.2
+numpy~=1.23.1
+pygame~=2.1.2
+pillow~=9.2.0
+cozmo~=1.4.10
+websockets~=10.3
