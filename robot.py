@@ -1,8 +1,3 @@
-import asyncio
-import time
-
-import numpy as np
-import PIL.Image
 import cozmo
 import cv2
 import os
@@ -11,7 +6,7 @@ from environment import *
 
 
 class VisionLocalizer:
-    def __init__(self):
+    def __init__(self, environment: Environment):
         self.aruco_dict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_APRILTAG_16H5)
         self.aruco_params = cv2.aruco.DetectorParameters_create()
         self.aruco_marker_width = 5  # cm
@@ -20,11 +15,11 @@ class VisionLocalizer:
 
         self.camera_matrix = np.zeros((3, 3))
         self.camera_distortion = np.zeros((5, 1))
-        self.robot_pose = Pose2D(0, 0, 0)
         self.cap = cv2.VideoCapture(1)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         self.camera_pose = Pose2D(0, 0, 0)
+        self.environment = environment
 
     def get_board(self):
         board = cv2.aruco.CharucoBoard_create(7, 7, self.board_box_width, self.board_marker_width, self.aruco_dict)
@@ -110,7 +105,7 @@ class VisionLocalizer:
                     cv2.drawFrameAxes(image, self.camera_matrix, self.camera_distortion, rotation_vec[i, :, :], translation_vec[i, :, :], 4)
 
                     print(translation_vec)
-                    self.robot_pose = Pose2D(translation_vec[i][0][0], -translation_vec[i][0][1], 0)
+                    self.environment.robot_pose = Pose2D(translation_vec[i][0][0], -translation_vec[i][0][1], 0)
 
     def run(self):
         while True:
@@ -136,13 +131,13 @@ if __name__ == '__main__':
         Obstacle(Pose2D(5, 3, 0), 2.5)
     ]
 
-    aruco_list = [
-        Aruco(Pose2D(0, 10, 0), 0),
-    ]
+    environment = Environment(100, obstacle_list)
+    print('ENVIRONMENT INITIALIZED')
 
-    vision_localizer = VisionLocalizer()
+    # CREATE PLANNER, LOCALIZER, CONTROLLER
+    rrt_planner = RRTPlanner(environment)
+    vision_localizer = VisionLocalizer(environment)
     robot_controller = RobotController()
-    environment = Environment(100, obstacle_list, aruco_list, robot_controller, vision_localizer)
 
     # CALIBRATE
     vision_localizer.write_board()
