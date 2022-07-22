@@ -47,7 +47,9 @@ class Pose2D:
         direction_vector = vector / length
         step_vector = direction_vector * step
 
-        return Pose2D(step_vector[0], step_vector[1], 0)
+        stepped_pose = self.pos() + step_vector
+
+        return Pose2D(stepped_pose[0], stepped_pose[1], 0)
 
 
 class Segment2D:
@@ -87,7 +89,7 @@ class Environment:
         self.obstacle_list = obstacle_list
         self.robot_pose = Pose2D(0, 0, 0)
         self.goal_pose = Pose2D(0, 0, 0)
-        self.rrt: List[Segment2D] = []
+        self.rrt_nodes: List[RRTNode] = []
 
     def random_pose(self):
         rand_x = random.uniform(0, self.x_dim)
@@ -122,7 +124,9 @@ class Environment:
             'x': self.x_dim,
             'y': self.y_dim,
             'obstacle_list': [obstacle.dict_rep() for obstacle in self.obstacle_list],
-            'robot_pose': self.robot_pose.dict_rep()
+            'robot_pose': self.robot_pose.dict_rep(),
+            'goal_pose': self.goal_pose.dict_rep(),
+            'rrt_nodes': [node.pose.dict_rep() for node in self.rrt_nodes]
         }
 
         return json.dumps(obj)
@@ -161,15 +165,25 @@ class RRTPlanner:
         return closest
 
     def plan(self, goal: Pose2D):
+        self.nodes = []
         self.environment.goal_pose = goal
 
-        root = RRTNode(self.environment.robot_pose, None)
-        self.nodes.append(root)
+        current_node = RRTNode(self.environment.robot_pose, None)
+        self.nodes.append(current_node)
 
-        random_pose = self.environment.biased_random_pose(goal, self.GOAL_BIAS_CHANCE)
-        nearest_node = self.nearest_node(random_pose)
-        stepped_pose = nearest_node.pose.step(random_pose, self.STEP_SIZE)
+        while not current_node.pose.is_within_tolerance(goal, self.GOAL_TOLERANCE):
+            random_pose = self.environment.biased_random_pose(goal, self.GOAL_BIAS_CHANCE)
 
+            nearest_node = self.nearest_node(random_pose)
+            stepped_pose = nearest_node.pose.step(random_pose, self.STEP_SIZE)
+
+            nearest_to_step_segment = Segment2D(nearest_node.pose, stepped_pose)
+
+            if self.environment.is_pose_free(stepped_pose) and self.environment.is_segment_free(nearest_to_step_segment):
+                current_node = RRTNode(stepped_pose, nearest_node)
+                self.nodes.append(current_node)
+
+            self.environment.rrt_nodes = self.nodes
 
 
 class RRTNode:

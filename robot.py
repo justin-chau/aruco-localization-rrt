@@ -128,7 +128,7 @@ if __name__ == '__main__':
     # CREATE ENVIRONMENT
     obstacle_list = [
         Obstacle(Pose2D(10, 10, 0), 2.5),
-        Obstacle(Pose2D(5, 3, 0), 2.5)
+        # Obstacle(Pose2D(5, 3, 0), 2.5)
     ]
 
     environment = Environment(100, obstacle_list)
@@ -136,13 +136,13 @@ if __name__ == '__main__':
 
     # CREATE PLANNER, LOCALIZER, CONTROLLER
     rrt_planner = RRTPlanner(environment)
-    vision_localizer = VisionLocalizer(environment)
+    # vision_localizer = VisionLocalizer(environment)
     robot_controller = RobotController()
 
     # CALIBRATE
-    vision_localizer.write_board()
-    vision_localizer.run_calibrate()
-    print('CAMERA CALIBRATED')
+    # vision_localizer.write_board()
+    # vision_localizer.run_calibrate()
+    # print('CAMERA CALIBRATED')
 
     # RUN COZMO
     cozmo_thread = Thread(target=cozmo.run_program, args=[robot_controller.run])
@@ -155,5 +155,8 @@ if __name__ == '__main__':
     print('WEBSOCKET SERVER STARTED')
 
     # START LOCALIZATION
-    vision_localizer.run()
-    print('LOCALIZATION SERVER STARTED')
+    # vision_localizer.run()
+    # print('LOCALIZATION SERVER STARTED')
+
+    rrt_planner.plan(Pose2D(20, 25, 0))
+    print('PLAN COMPLETED')
