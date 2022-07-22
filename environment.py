@@ -4,6 +4,7 @@ import asyncio
 import websockets
 import json
 from typing import List
+from robot import RobotController, VisionLocalizer
 
 
 class Pose2D:
@@ -51,12 +52,14 @@ class Aruco:
 
 
 class Environment:
-    def __init__(self, length: int, obstacle_list: List[Obstacle], aruco_list: List[Aruco]):
+    def __init__(self, length: int, obstacle_list: List[Obstacle], aruco_list: List[Aruco],
+                 robot_controller: RobotController, vision_localizer: VisionLocalizer):
         self.x_dim = length
         self.y_dim = length
         self.obstacle_list = obstacle_list
         self.aruco_list = aruco_list
-        self.robot_pose = Pose2D(0, 0, 0)
+        self.robot_controller = robot_controller
+        self.vision_localizer = vision_localizer
 
     def json(self):
         obj = {
@@ -64,17 +67,19 @@ class Environment:
             'y': self.y_dim,
             'obstacle_list': [obstacle.dict_rep() for obstacle in self.obstacle_list],
             'aruco_list': [aruco.dict_rep() for aruco in self.aruco_list],
-            'robot_pose': self.robot_pose.dict_rep()
+            'robot_pose': self.vision_localizer.robot_pose.dict_rep()
         }
 
         return json.dumps(obj)
 
-    async def serve(self, websocket, _path):
+    async def serve(self, websocket, path):
         while True:
             await websocket.send(self.json())
             await asyncio.sleep(0.1)
 
     def start_server(self):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         start_server = websockets.serve(self.serve, 'localhost', 5555)
         asyncio.get_event_loop().run_until_complete(start_server)
         asyncio.get_event_loop().run_forever()

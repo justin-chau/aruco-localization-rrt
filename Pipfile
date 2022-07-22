@@ -5,6 +5,7 @@ name = "pypi"
 
 [packages]
 pyzmq = "*"
+opencv-contrib-python = "*"
 
 [dev-packages]
 
