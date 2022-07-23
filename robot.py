@@ -15,10 +15,9 @@ class VisionLocalizer:
 
         self.camera_matrix = np.zeros((3, 3))
         self.camera_distortion = np.zeros((5, 1))
-        self.cap = cv2.VideoCapture(1)
+        self.cap = cv2.VideoCapture(0)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        self.camera_pose = Pose2D(0, 0, 0)
         self.environment = environment
 
     def get_board(self):
@@ -104,7 +103,6 @@ class VisionLocalizer:
                 for i in range(rotation_vec.shape[0]):
                     cv2.drawFrameAxes(image, self.camera_matrix, self.camera_distortion, rotation_vec[i, :, :], translation_vec[i, :, :], 4)
 
-                    print(translation_vec)
                     self.environment.robot_pose = Pose2D(translation_vec[i][0][0], -translation_vec[i][0][1], 0)
 
     def run(self):
@@ -117,32 +115,50 @@ class VisionLocalizer:
 
 
 class RobotController:
-    def __init__(self):
+    def __init__(self, rrt_planner: RRTPlanner, environment: Environment):
         self.robot = None
+        self.OFF_PATH_TOLERANCE = 10
 
     def run(self, robot: cozmo.robot.Robot):
         self.robot = robot
+
+        while True:
+            if environment.is_at_goal is False:
+                print('GENERATING RRT')
+                rrt_planner.plan(time_limit=False)
+
+                path = environment.path
+
+                for pose in path:
+                    if not pose.is_within_tolerance(environment.robot_pose, self.OFF_PATH_TOLERANCE):
+                        print('ROBOT IS OFF PATH, RECOMPUTING RRT')
+
+                    print(pose)
+
+                environment.is_at_goal = True
 
 
 if __name__ == '__main__':
     # CREATE ENVIRONMENT
     obstacle_list = [
         Obstacle(Pose2D(10, 10, 0), 2.5),
-        # Obstacle(Pose2D(5, 3, 0), 2.5)
+        Obstacle(Pose2D(5, 3, 0), 2.5),
+        Obstacle(Pose2D(5, 3, 0), 2.5)
     ]
 
     environment = Environment(100, obstacle_list)
+    environment.add_random_obstacles(10, 3, 5)
     print('ENVIRONMENT INITIALIZED')
 
     # CREATE PLANNER, LOCALIZER, CONTROLLER
     rrt_planner = RRTPlanner(environment)
-    # vision_localizer = VisionLocalizer(environment)
-    robot_controller = RobotController()
+    vision_localizer = VisionLocalizer(environment)
+    robot_controller = RobotController(rrt_planner, environment)
 
     # CALIBRATE
-    # vision_localizer.write_board()
-    # vision_localizer.run_calibrate()
-    # print('CAMERA CALIBRATED')
+    vision_localizer.write_board()
+    vision_localizer.run_calibrate()
+    print('CAMERA CALIBRATED')
 
     # RUN COZMO
     cozmo_thread = Thread(target=cozmo.run_program, args=[robot_controller.run])
@@ -154,9 +170,11 @@ if __name__ == '__main__':
     websocket_thread.start()
     print('WEBSOCKET SERVER STARTED')
 
-    # START LOCALIZATION
-    # vision_localizer.run()
-    # print('LOCALIZATION SERVER STARTED')
+    # START PLANNING SERVER
+    # planning_thread = Thread(target=rrt_planner.start, args=[Pose2D(100, 100, 0)])
+    # planning_thread.start()
+    # print('PLANNING SERVER STARTED')
 
-    rrt_planner.plan(Pose2D(20, 25, 0))
-    print('PLAN COMPLETED')
+    # START LOCALIZATION SERVER
+    vision_localizer.run()
+    print('LOCALIZATION SERVER STARTED')

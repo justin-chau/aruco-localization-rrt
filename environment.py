@@ -6,7 +6,7 @@ import numpy as np
 import json
 import random
 from typing import List, Optional
-
+import time
 
 class Pose2D:
     def __init__(self, x: float, y: float, theta: float):
@@ -66,8 +66,13 @@ class Obstacle:
     def is_pose_inside(self, pose: Pose2D):
         return self.pose.is_within_tolerance(pose, self.radius)
 
+    # TODO: FIX THIS ALGORITHM, CURRENTLY IT CHECKS THE WHOLE LINE, NOT A SEGMENT
     def does_segment_intersect(self, segment: Segment2D):
-        distance = np.abs(np.linalg.norm(np.cross(segment.start.pos() - segment.end.pos(), segment.end.pos() - self.pose.pos()))) / np.linalg.norm(segment.start.pos() - segment.end.pos())
+        start = segment.start.pos()
+        end = segment.end.pos()
+        pos = self.pose.pos()
+
+        distance = np.abs(np.linalg.norm(np.cross(end - start, start - pos)))/np.linalg.norm(end - start)
         if distance <= self.radius:
             return True
 
@@ -88,8 +93,17 @@ class Environment:
         self.y_dim = length
         self.obstacle_list = obstacle_list
         self.robot_pose = Pose2D(0, 0, 0)
-        self.goal_pose = Pose2D(0, 0, 0)
-        self.rrt_nodes: List[RRTNode] = []
+        self.goal_pose = Pose2D(100, 100, 0)
+        self.is_at_goal: bool = False
+        self.path: List[Pose2D] = []
+
+    def set_goal(self, goal: Pose2D):
+        self.goal_pose = goal
+        self.is_at_goal = False
+
+    def add_random_obstacles(self, number: int, min_radius: float, max_radius: float):
+        for i in range(number):
+            self.obstacle_list.append(Obstacle(self.random_pose(), random.uniform(min_radius, max_radius)))
 
     def random_pose(self):
         rand_x = random.uniform(0, self.x_dim)
@@ -126,7 +140,7 @@ class Environment:
             'obstacle_list': [obstacle.dict_rep() for obstacle in self.obstacle_list],
             'robot_pose': self.robot_pose.dict_rep(),
             'goal_pose': self.goal_pose.dict_rep(),
-            'rrt_nodes': [node.pose.dict_rep() for node in self.rrt_nodes]
+            'path': [pose.dict_rep() for pose in self.path]
         }
 
         return json.dumps(obj)
@@ -146,7 +160,7 @@ class Environment:
 
 class RRTPlanner:
     def __init__(self, environment: Environment):
-        self.nodes: List[RRTNode] = []
+        self.tree: List[RRTNode] = []
         self.STEP_SIZE = 2
         self.GOAL_BIAS_CHANCE = 0.1
         self.GOAL_TOLERANCE = 2
@@ -156,7 +170,7 @@ class RRTPlanner:
         closest = None
         min_distance = np.inf
 
-        for node in self.nodes:
+        for node in self.tree:
             distance = node.pose.distance(pose)
             if distance < min_distance:
                 min_distance = distance
@@ -164,14 +178,16 @@ class RRTPlanner:
 
         return closest
 
-    def plan(self, goal: Pose2D):
-        self.nodes = []
-        self.environment.goal_pose = goal
-
-        current_node = RRTNode(self.environment.robot_pose, None)
-        self.nodes.append(current_node)
+    def generate_tree(self, goal: Pose2D, time_limit: bool = False):
+        root_node = RRTNode(self.environment.robot_pose, None)
+        current_node = root_node
+        self.tree.append(current_node)
+        start_time = time.time()
 
         while not current_node.pose.is_within_tolerance(goal, self.GOAL_TOLERANCE):
+            if time_limit and time.time() > start_time + 5:
+                raise Exception('TREE EXCEEDED TIME LIMIT')
+
             random_pose = self.environment.biased_random_pose(goal, self.GOAL_BIAS_CHANCE)
 
             nearest_node = self.nearest_node(random_pose)
@@ -181,9 +197,53 @@ class RRTPlanner:
 
             if self.environment.is_pose_free(stepped_pose) and self.environment.is_segment_free(nearest_to_step_segment):
                 current_node = RRTNode(stepped_pose, nearest_node)
-                self.nodes.append(current_node)
+                self.tree.append(current_node)
 
-            self.environment.rrt_nodes = self.nodes
+        # Returns the root node and the goal node
+        return root_node, current_node
+
+    def recover_path(self, root: RRTNode, goal: RRTNode):
+        path: List[Pose2D] = []
+        current = goal
+
+        while current is not root:
+            path.insert(0, current.pose)
+            current = current.parent
+
+        return path
+
+    def smooth_path(self, path):
+        if len(path) == 1:
+            return path
+
+        current_pose = self.path[0]
+        smoothed_path = [current_pose]
+
+        for future in range(len(path) - 1, 1, -1):
+            future_pose = path[future]
+
+            current_future_segment = Segment2D(current_pose, future_pose)
+
+            if self.environment.is_segment_free(current_future_segment):
+                smoothed_path.extend(self.smooth_path(path[future: len(path)]))
+                return smoothed_path
+
+        smoothed_path.extend(self.smooth_path(path[1: len(path)]))
+        return smoothed_path
+
+    def plan(self, time_limit: bool = False):
+        try:
+            self.tree = []
+            root, goal = self.generate_tree(self.environment.goal_pose, time_limit=time_limit)
+            path = self.recover_path(root, goal)
+            self.environment.path = path
+        except Exception as e:
+            print(e)
+
+    def start(self):
+        while True:
+            if self.environment.is_pose_free(self.environment.robot_pose):
+                self.plan(time_limit=True)
 
 
 class RRTNode:
