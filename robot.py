@@ -15,7 +15,7 @@ class VisionLocalizer:
 
         self.camera_matrix = np.zeros((3, 3))
         self.camera_distortion = np.zeros((5, 1))
-        self.cap = cv2.VideoCapture(0)
+        self.cap = cv2.VideoCapture(1)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         self.environment = environment
@@ -103,7 +103,12 @@ class VisionLocalizer:
                 for i in range(rotation_vec.shape[0]):
                     cv2.drawFrameAxes(image, self.camera_matrix, self.camera_distortion, rotation_vec[i, :, :], translation_vec[i, :, :], 4)
 
-                    self.environment.robot_pose = Pose2D(translation_vec[i][0][0], -translation_vec[i][0][1], 0)
+                    rotation = Rotation3D.from_rotation_vec(rotation_vec[i, :, :])
+
+                    camera_T_robot = Pose3D(translation_vec[i][0][0], translation_vec[i][0][1], translation_vec[i][0][2], rotation)
+                    world_T_robot = self.environment.world_T_camera.compose(camera_T_robot)
+
+                    self.environment.robot_pose = Pose2D(world_T_robot.x, world_T_robot.y, world_T_robot.rotation.get_yaw())
 
     def run(self):
         while True:
@@ -118,24 +123,48 @@ class RobotController:
     def __init__(self, rrt_planner: RRTPlanner, environment: Environment):
         self.robot = None
         self.OFF_PATH_TOLERANCE = 10
+        self.ANGLE_TOLERANCE = np.deg2rad(5)
+        self.GOAL_TOLERANCE = 4
+        self.ROTATION_SPEED = 10
+        self.rrt_planner = rrt_planner
+        self.environment = environment
 
-    def run(self, robot: cozmo.robot.Robot):
+    def run(self, robot: Optional[cozmo.robot.Robot] = None):
         self.robot = robot
 
         while True:
-            if environment.is_at_goal is False:
+            if self.environment.is_at_goal is False:
                 print('GENERATING RRT')
-                rrt_planner.plan(time_limit=False)
 
-                path = environment.path
+                try:
+                    self.rrt_planner.plan(time_limit=True)
+                    print('RRT GENERATED')
+                    path = self.environment.path
 
-                for pose in path:
-                    if not pose.is_within_tolerance(environment.robot_pose, self.OFF_PATH_TOLERANCE):
-                        print('ROBOT IS OFF PATH, RECOMPUTING RRT')
+                    # for pose in path:
+                    while True:
+                        # if not pose.is_within_tolerance(self.environment.robot_pose, self.OFF_PATH_TOLERANCE):
+                        #     print('ROBOT IS OFF PATH, RECOMPUTING RRT')
+                        #     break
 
-                    print(pose)
+                        delta_pos = path[0].pos() - self.environment.robot_pose.pos()
 
-                environment.is_at_goal = True
+                        world_rotation_to_next = np.arctan2(delta_pos[1], delta_pos[0])
+
+                        delta_rotation = ((world_rotation_to_next - np.pi / 2) - self.environment.robot_pose.theta)
+
+                        self.robot.drive_wheel_motors(-delta_rotation * self.ROTATION_SPEED, delta_rotation * self.ROTATION_SPEED)
+
+                        # print(np.rad2deg(self.environment.robot_pose.theta))
+                        # print(np.rad2deg(world_rotation_to_next))
+
+                        # ADD LOGIC TO MOVE ROBOT HERE
+
+                    if self.environment.robot_pose.is_within_tolerance(self.environment.goal_pose, self.GOAL_TOLERANCE):
+                        environment.is_at_goal = True
+                        print('ROBOT ARRIVED AT GOAL')
+                except:
+                    print('COULD NOT GENERATE RRT IN TIME')
 
 
 if __name__ == '__main__':
@@ -165,15 +194,14 @@ if __name__ == '__main__':
     cozmo_thread.start()
     print('COZMO STARTED')
 
+    # RUN WITHOUT COZMO
+    # robot_thread = Thread(target=robot_controller.run)
+    # robot_thread.start()
+
     # START WEBSOCKET SERVER
     websocket_thread = Thread(target=environment.start_server)
     websocket_thread.start()
     print('WEBSOCKET SERVER STARTED')
-
-    # START PLANNING SERVER
-    # planning_thread = Thread(target=rrt_planner.start, args=[Pose2D(100, 100, 0)])
-    # planning_thread.start()
-    # print('PLANNING SERVER STARTED')
 
     # START LOCALIZATION SERVER
     vision_localizer.run()

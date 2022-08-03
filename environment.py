@@ -7,6 +7,54 @@ import json
 import random
 from typing import List, Optional
 import time
+import cv2
+from scipy.spatial.transform import Rotation
+
+
+class Rotation3D:
+    def __init__(self, x: float, y: float, z: float):
+        self.x = x
+        self.y = y
+        self.z = z
+        self._rotation = Rotation.from_euler('xyz', [x, y, z])
+        self.mat = self._rotation.as_matrix()
+
+    @staticmethod
+    def from_rotation_vec(rotation_vec) -> Rotation3D:
+        rotation_mat, _ = cv2.Rodrigues(rotation_vec)
+        angles = Rotation.from_matrix(rotation_mat).as_euler('xyz')
+
+        return Rotation3D(angles[0], angles[1], angles[2])
+
+    @staticmethod
+    def from_rotation_mat(rotation_mat) -> Rotation3D:
+        angles = Rotation.from_matrix(rotation_mat).as_euler('xyz')
+
+        return Rotation3D(angles[0], angles[1], angles[2])
+
+    def get_yaw(self):
+        return self._rotation.as_euler('xyz')[2]
+
+
+class Pose3D:
+    def __init__(self, x: float, y: float, z: float, rotation: Rotation3D):
+        self.x = x
+        self.y = y
+        self.z = z
+        self.rotation = rotation
+        self.mat = np.vstack((np.hstack((self.rotation.mat, [[self.x], [self.y], [self.z]])), [0, 0, 0, 1]))
+
+    def compose(self, other: Pose3D) -> Pose3D:
+        result_matrix = np.matmul(self.mat, other.mat)
+
+        x = result_matrix[0][3]
+        y = result_matrix[1][3]
+        z = result_matrix[2][3]
+
+        rotation_mat = result_matrix[0:3, 0:3]
+
+        return Pose3D(x, y, z, Rotation3D.from_rotation_mat(rotation_mat))
+
 
 class Pose2D:
     def __init__(self, x: float, y: float, theta: float):
@@ -94,6 +142,7 @@ class Environment:
         self.obstacle_list = obstacle_list
         self.robot_pose = Pose2D(0, 0, 0)
         self.goal_pose = Pose2D(100, 100, 0)
+        self.world_T_camera = Pose3D(0, -10, 30, Rotation3D(np.deg2rad(-110), 0, 0))
         self.is_at_goal: bool = False
         self.path: List[Pose2D] = []
 
@@ -162,7 +211,7 @@ class RRTPlanner:
     def __init__(self, environment: Environment):
         self.tree: List[RRTNode] = []
         self.STEP_SIZE = 2
-        self.GOAL_BIAS_CHANCE = 0.1
+        self.GOAL_BIAS_CHANCE = 0.3
         self.GOAL_TOLERANCE = 2
         self.environment = environment
 
@@ -212,24 +261,24 @@ class RRTPlanner:
 
         return path
 
-    def smooth_path(self, path):
-        if len(path) == 1:
-            return path
-
-        current_pose = self.path[0]
-        smoothed_path = [current_pose]
-
-        for future in range(len(path) - 1, 1, -1):
-            future_pose = path[future]
-
-            current_future_segment = Segment2D(current_pose, future_pose)
-
-            if self.environment.is_segment_free(current_future_segment):
-                smoothed_path.extend(self.smooth_path(path[future: len(path)]))
-                return smoothed_path
-
-        smoothed_path.extend(self.smooth_path(path[1: len(path)]))
-        return smoothed_path
+    # def smooth_path(self, path):
+    #     if len(path) == 1:
+    #         return path
+    #
+    #     current_pose = self.path[0]
+    #     smoothed_path = [current_pose]
+    #
+    #     for future in range(len(path) - 1, 1, -1):
+    #         future_pose = path[future]
+    #
+    #         current_future_segment = Segment2D(current_pose, future_pose)
+    #
+    #         if self.environment.is_segment_free(current_future_segment):
+    #             smoothed_path.extend(self.smooth_path(path[future: len(path)]))
+    #             return smoothed_path
+    #
+    #     smoothed_path.extend(self.smooth_path(path[1: len(path)]))
+    #     return smoothed_path
 
     def plan(self, time_limit: bool = False):
         try:
