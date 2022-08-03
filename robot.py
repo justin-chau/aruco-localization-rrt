@@ -1,7 +1,9 @@
 import cozmo
-import cv2
 import os
 from threading import Thread
+
+import numpy as np
+
 from environment import *
 
 
@@ -123,21 +125,21 @@ class RobotController:
     def __init__(self, rrt_planner: RRTPlanner, environment: Environment):
         self.robot = None
         self.OFF_PATH_TOLERANCE = 100 # TODO: CHANGE THIS TOLERANCE TO MAKE SENSE
-        self.ANGLE_TOLERANCE = np.deg2rad(5)
-        self.POSITION_TOLERANCE = 4
+        self.ANGLE_TOLERANCE = np.deg2rad(10)
+        self.POSITION_TOLERANCE = 2
         self.ROTATION_SPEED = 10
-        self.STRAIGHT_SPEED = 10
+        self.STRAIGHT_SPEED = 20
         self.rrt_planner = rrt_planner
         self.environment = environment
 
     def stop(self):
         self.robot.drive_wheel_motors(0, 0)
 
-    def rotate_to_angle(self, angle):
-        delta_rotation = ((angle - np.pi / 2) - self.environment.robot_pose.theta)
-        self.robot.drive_wheel_motors(-delta_rotation * self.ROTATION_SPEED, delta_rotation * self.ROTATION_SPEED)
+    def rotate(self, angle):
+        self.robot.drive_wheel_motors(-self.ROTATION_SPEED * angle, self.ROTATION_SPEED * angle)
 
     def drive_straight(self):
+        # TODO: ADD P CONTROLLER
         self.robot.drive_wheel_motors(self.STRAIGHT_SPEED, self.STRAIGHT_SPEED)
 
     def run(self, robot: Optional[cozmo.robot.Robot] = None):
@@ -154,6 +156,7 @@ class RobotController:
                     current_target = next(path)
 
                     while True:
+                        # print('TARGET: ', current_target.pos())
                         if self.environment.robot_pose.is_within_tolerance(self.environment.goal_pose,
                                                                            self.POSITION_TOLERANCE):
                             # The robot is close enough to goal, so we stop.
@@ -179,15 +182,21 @@ class RobotController:
                                 break
 
                         # Calculate the angle from robot_pose to current_pose
-                        delta_pos = path[0].pos() - self.environment.robot_pose.pos()
+                        delta_pos = current_target.pos() - self.environment.robot_pose.pos()
                         world_rotation_to_next = np.arctan2(delta_pos[1], delta_pos[0])
+                        delta_rotation = ((world_rotation_to_next - np.pi / 2) - self.environment.robot_pose.theta)
 
-                        if world_rotation_to_next > self.ANGLE_TOLERANCE:
-                            self.rotate_to_angle(world_rotation_to_next)
+                        if np.abs(delta_rotation) > self.ANGLE_TOLERANCE:
+                            print('ROTATION ERROR: ', delta_rotation, 'TOLERANCE: ', self.ANGLE_TOLERANCE)
+                            self.rotate(delta_rotation)
                         elif not self.environment.robot_pose.is_within_tolerance(current_target, self.POSITION_TOLERANCE):
+                            print('STRAIGHT ERROR: ', self.environment.robot_pose.distance(current_target))
                             self.drive_straight()
+                        else:
+                            self.stop()
 
-                except:
+                except Exception as e:
+                    print(e)
                     print('COULD NOT GENERATE RRT IN TIME')
 
 
