@@ -122,12 +122,23 @@ class VisionLocalizer:
 class RobotController:
     def __init__(self, rrt_planner: RRTPlanner, environment: Environment):
         self.robot = None
-        self.OFF_PATH_TOLERANCE = 10
+        self.OFF_PATH_TOLERANCE = 100 # TODO: CHANGE THIS TOLERANCE TO MAKE SENSE
         self.ANGLE_TOLERANCE = np.deg2rad(5)
-        self.GOAL_TOLERANCE = 4
+        self.POSITION_TOLERANCE = 4
         self.ROTATION_SPEED = 10
+        self.STRAIGHT_SPEED = 10
         self.rrt_planner = rrt_planner
         self.environment = environment
+
+    def stop(self):
+        self.robot.drive_wheel_motors(0, 0)
+
+    def rotate_to_angle(self, angle):
+        delta_rotation = ((angle - np.pi / 2) - self.environment.robot_pose.theta)
+        self.robot.drive_wheel_motors(-delta_rotation * self.ROTATION_SPEED, delta_rotation * self.ROTATION_SPEED)
+
+    def drive_straight(self):
+        self.robot.drive_wheel_motors(self.STRAIGHT_SPEED, self.STRAIGHT_SPEED)
 
     def run(self, robot: Optional[cozmo.robot.Robot] = None):
         self.robot = robot
@@ -139,30 +150,43 @@ class RobotController:
                 try:
                     self.rrt_planner.plan(time_limit=True)
                     print('RRT GENERATED')
-                    path = self.environment.path
+                    path = iter(self.environment.path)
+                    current_target = next(path)
 
-                    # for pose in path:
                     while True:
-                        # if not pose.is_within_tolerance(self.environment.robot_pose, self.OFF_PATH_TOLERANCE):
-                        #     print('ROBOT IS OFF PATH, RECOMPUTING RRT')
-                        #     break
+                        if self.environment.robot_pose.is_within_tolerance(self.environment.goal_pose,
+                                                                           self.POSITION_TOLERANCE):
+                            # The robot is close enough to goal, so we stop.
+                            self.stop()
+                            print('ROBOT ARRIVED AT GOAL')
+                            environment.is_at_goal = True
+                            break
 
+                        if not current_target.is_within_tolerance(self.environment.robot_pose, self.OFF_PATH_TOLERANCE):
+                            # The target is too far, so we re-plan from current pose.
+                            self.stop()
+                            print('ROBOT IS OFF PATH, RECOMPUTING RRT')
+                            break
+
+                        if current_target.is_within_tolerance(self.environment.robot_pose, self.POSITION_TOLERANCE):
+                            # Robot pose is close enough to the target, so we set the next target in path.
+                            try:
+                                current_target = next(path)
+                            except:
+                                # Something went wrong and the robot exhausted the path, but has not reached goal.
+                                # We re-plan a new path.
+                                print('ROBOT DID NOT REACH GOAL, BUT PATH IS COMPLETE. RETRYING...')
+                                break
+
+                        # Calculate the angle from robot_pose to current_pose
                         delta_pos = path[0].pos() - self.environment.robot_pose.pos()
-
                         world_rotation_to_next = np.arctan2(delta_pos[1], delta_pos[0])
 
-                        delta_rotation = ((world_rotation_to_next - np.pi / 2) - self.environment.robot_pose.theta)
+                        if world_rotation_to_next > self.ANGLE_TOLERANCE:
+                            self.rotate_to_angle(world_rotation_to_next)
+                        elif not self.environment.robot_pose.is_within_tolerance(current_target, self.POSITION_TOLERANCE):
+                            self.drive_straight()
 
-                        self.robot.drive_wheel_motors(-delta_rotation * self.ROTATION_SPEED, delta_rotation * self.ROTATION_SPEED)
-
-                        # print(np.rad2deg(self.environment.robot_pose.theta))
-                        # print(np.rad2deg(world_rotation_to_next))
-
-                        # ADD LOGIC TO MOVE ROBOT HERE
-
-                    if self.environment.robot_pose.is_within_tolerance(self.environment.goal_pose, self.GOAL_TOLERANCE):
-                        environment.is_at_goal = True
-                        print('ROBOT ARRIVED AT GOAL')
                 except:
                     print('COULD NOT GENERATE RRT IN TIME')
 
