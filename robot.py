@@ -2,28 +2,32 @@ import cozmo
 import os
 from threading import Thread
 
-import numpy as np
-
 from environment import *
 
 
 class VisionLocalizer:
     def __init__(self, environment: Environment):
-        self.aruco_dict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_APRILTAG_16H5)
+        self.aruco_dict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_4X4_50)
+        self.aruco_calibration_dict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_APRILTAG_16H5)
         self.aruco_params = cv2.aruco.DetectorParameters_create()
-        self.aruco_marker_width = 5  # cm
+        self.aruco_marker_width = 6.2  # cm
         self.board_box_width = 1
         self.board_marker_width = 0.8
 
         self.camera_matrix = np.zeros((3, 3))
         self.camera_distortion = np.zeros((5, 1))
         self.cap = cv2.VideoCapture(1)
+        self.cap.read()
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+        self.cap.set(cv2.CAP_PROP_EXPOSURE, -1)
         self.environment = environment
+        self.camera_pose_estimates: List[Pose3D] = []
+        self.camera_complete_estimates = set()
 
     def get_board(self):
-        board = cv2.aruco.CharucoBoard_create(7, 7, self.board_box_width, self.board_marker_width, self.aruco_dict)
+        board = cv2.aruco.CharucoBoard_create(7, 7, self.board_box_width, self.board_marker_width, self.aruco_calibration_dict)
         return board
 
     def write_board(self):
@@ -47,7 +51,7 @@ class VisionLocalizer:
             grayscale_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
             corners, ids, rejected = cv2.aruco.detectMarkers(
-                grayscale_frame, self.aruco_dict, parameters=self.aruco_params)
+                grayscale_frame, self.aruco_calibration_dict, parameters=self.aruco_params)
 
             if len(corners) > 0:
                 # SUB PIXEL DETECTION
@@ -67,8 +71,8 @@ class VisionLocalizer:
         return all_corners, all_ids, grayscale_frame.shape
 
     def calibrate_camera(self, all_corners, all_ids, imsize):
-        camera_matrix = np.array([[4500, 0., imsize[0] / 2.],
-                                  [0., 4500, imsize[1] / 2.],
+        camera_matrix = np.array([[1000, 0., imsize[0] / 2.],
+                                  [0., 1000, imsize[1] / 2.],
                                   [0., 0., 1.]])
 
         distortion_coefficients = np.zeros((5, 1))
@@ -76,7 +80,7 @@ class VisionLocalizer:
         flags = (cv2.CALIB_USE_INTRINSIC_GUESS +
                  cv2.CALIB_RATIONAL_MODEL + cv2.CALIB_FIX_ASPECT_RATIO)
 
-        (_, camera_matrix, distortion_coefficient, _, _, _, _, _) = cv2.aruco.calibrateCameraCharucoExtended(
+        (_, camera_matrix, distortion_coefficients, _, _, _, _, _) = cv2.aruco.calibrateCameraCharucoExtended(
             charucoCorners=all_corners,
             charucoIds=all_ids,
             board=self.get_board(),
@@ -103,14 +107,50 @@ class VisionLocalizer:
                                                                   self.camera_distortion)
             if rotation_vec is not None:
                 for i in range(rotation_vec.shape[0]):
-                    cv2.drawFrameAxes(image, self.camera_matrix, self.camera_distortion, rotation_vec[i, :, :], translation_vec[i, :, :], 4)
+
+                    cv2.drawFrameAxes(image, self.camera_matrix, self.camera_distortion, rotation_vec[i, :, :],
+                                      translation_vec[i, :, :], 4)
 
                     rotation = Rotation3D.from_rotation_vec(rotation_vec[i, :, :])
+                    camera_T_marker = Pose3D(translation_vec[i][0][0], translation_vec[i][0][1],
+                                            translation_vec[i][0][2], rotation)
 
-                    camera_T_robot = Pose3D(translation_vec[i][0][0], translation_vec[i][0][1], translation_vec[i][0][2], rotation)
-                    world_T_robot = self.environment.world_T_camera.compose(camera_T_robot)
+                    if ids[i][0] in [4]:
+                        if self.environment.world_T_camera is None:
 
-                    self.environment.robot_pose = Pose2D(world_T_robot.x, world_T_robot.y, world_T_robot.rotation.get_yaw())
+                            marker_T_camera = camera_T_marker.inverse()
+
+                            world_T_camera = Pose3D(0, 0, 0, Rotation3D(0,0,0))
+
+                            if ids[i][0] == 4:
+                                world_T_camera = self.environment.world_T_bottom_left.compose(marker_T_camera)
+
+                            # if ids[i][0] == 3:
+                            #     world_T_camera = self.environment.world_T_bottom_right.compose(marker_T_camera)
+                            #
+                            # if ids[i][0] == 2:
+                            #     world_T_camera = self.environment.world_T_top_right.compose(marker_T_camera)
+
+                            if ids[i][0] not in self.camera_complete_estimates:
+                                self.camera_complete_estimates.add(ids[i][0])
+                                self.camera_pose_estimates.append(world_T_camera)
+
+                            if len(self.camera_pose_estimates) == 1:
+                                total = np.zeros((4, 4))
+
+                                # for camera_pose_estimate in self.camera_pose_estimates:
+                                #     total += camera_pose_estimate.mat
+                                #
+                                # total = total / 3
+                                #
+                                # final_world_T_camera = Pose3D(total[0][3], total[1][3], total[2][3], Rotation3D.from_rotation_mat(total[0:3, 0:3]))
+                                self.environment.world_T_camera = self.camera_pose_estimates[0]
+
+
+                    if ids[i][0] == 1:
+                        if self.environment.world_T_camera is not None:
+                            world_T_robot = self.environment.world_T_camera.compose(camera_T_marker)
+                            self.environment.robot_pose = Pose2D(world_T_robot.x, world_T_robot.y, world_T_robot.rotation.get_yaw())
 
     def run(self):
         while True:
@@ -124,10 +164,10 @@ class VisionLocalizer:
 class RobotController:
     def __init__(self, rrt_planner: RRTPlanner, environment: Environment):
         self.robot = None
-        self.OFF_PATH_TOLERANCE = 100 # TODO: CHANGE THIS TOLERANCE TO MAKE SENSE
+        self.OFF_PATH_TOLERANCE = 10  #TODO: CHANGE THIS TOLERANCE TO MAKE SENSE
         self.ANGLE_TOLERANCE = np.deg2rad(10)
         self.POSITION_TOLERANCE = 2
-        self.ROTATION_SPEED = 10
+        self.ROTATION_SPEED = 20
         self.STRAIGHT_SPEED = 20
         self.rrt_planner = rrt_planner
         self.environment = environment
@@ -203,13 +243,14 @@ class RobotController:
 if __name__ == '__main__':
     # CREATE ENVIRONMENT
     obstacle_list = [
-        Obstacle(Pose2D(10, 10, 0), 2.5),
-        Obstacle(Pose2D(5, 3, 0), 2.5),
-        Obstacle(Pose2D(5, 3, 0), 2.5)
+        Obstacle(Pose2D(29.3, 15.24, 0), 12),
+        Obstacle(Pose2D(29.3, 6.35, 0), 12),
+        Obstacle(Pose2D(46.99, 41.91, 0), 12),
+        Obstacle(Pose2D(54.61, 34.29, 0), 12)
     ]
 
-    environment = Environment(100, obstacle_list)
-    environment.add_random_obstacles(10, 3, 5)
+    environment = Environment(80, 50.165, obstacle_list)
+    # environment.add_random_obstacles(10, 3, 5)
     print('ENVIRONMENT INITIALIZED')
 
     # CREATE PLANNER, LOCALIZER, CONTROLLER

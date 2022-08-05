@@ -55,6 +55,11 @@ class Pose3D:
 
         return Pose3D(x, y, z, Rotation3D.from_rotation_mat(rotation_mat))
 
+    def inverse(self) -> Pose3D:
+        inverse = np.linalg.inv(self.mat)
+
+        return Pose3D(inverse[0][3], inverse[1][3], inverse[2][3], Rotation3D.from_rotation_mat(inverse[0:3, 0:3]))
+
 
 class Pose2D:
     def __init__(self, x: float, y: float, theta: float):
@@ -120,7 +125,7 @@ class Obstacle:
         end = segment.end.pos()
         pos = self.pose.pos()
 
-        distance = np.abs(np.linalg.norm(np.cross(end - start, start - pos)))/np.linalg.norm(end - start)
+        distance = np.abs(np.linalg.norm(np.cross(end - start, start - pos))) / np.linalg.norm(end - start)
         if distance <= self.radius:
             return True
 
@@ -136,13 +141,22 @@ class Obstacle:
 
 
 class Environment:
-    def __init__(self, length: int, obstacle_list: List[Obstacle]):
-        self.x_dim = length
-        self.y_dim = length
+    def __init__(self, x: float, y: float, obstacle_list: List[Obstacle]):
+        self.x_dim = x
+        self.y_dim = y
         self.obstacle_list = obstacle_list
-        self.robot_pose = Pose2D(0, 0, 0)
-        self.goal_pose = Pose2D(100, 100, 0)
-        self.world_T_camera = Pose3D(0, -10, 30, Rotation3D(np.deg2rad(-110), 0, 0))
+        self.robot_pose = Pose2D(0, 0, 0)  # ID 1
+        self.goal_pose = Pose2D(72, 40, 0)
+        self.world_T_camera = None
+
+        self.BOTTOM_LEFT_ID = 4
+        self.BOTTOM_RIGHT_ID = 3
+        self.TOP_RIGHT_ID = 2
+
+        self.world_T_bottom_left = Pose3D(40, 25, 0, Rotation3D(0, 0, 0))  # ID 4
+        self.world_T_bottom_right = Pose3D(77.25, 3.1, 0, Rotation3D(0, 0, 0))  # ID 3
+        self.world_T_top_right = Pose3D(77.25, 47.25, 0, Rotation3D(0, 0, 0))  # ID 2
+
         self.is_at_goal: bool = False
         self.path: List[Pose2D] = []
 
@@ -244,7 +258,8 @@ class RRTPlanner:
 
             nearest_to_step_segment = Segment2D(nearest_node.pose, stepped_pose)
 
-            if self.environment.is_pose_free(stepped_pose) and self.environment.is_segment_free(nearest_to_step_segment):
+            if self.environment.is_pose_free(stepped_pose) and self.environment.is_segment_free(
+                    nearest_to_step_segment):
                 current_node = RRTNode(stepped_pose, nearest_node)
                 self.tree.append(current_node)
 
